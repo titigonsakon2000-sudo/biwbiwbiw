@@ -1,0 +1,442 @@
+<!DOCTYPE html>
+<html lang="th">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>ระบบจัดเส้นทางส่งของ - Focus Mode</title>
+    
+    <script src="https://cdn.jsdelivr.net/npm/@tailwindcss/browser@4"></script>
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.1/css/all.min.css">
+    
+    <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+    <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+    
+    <link rel="stylesheet" href="https://unpkg.com/leaflet-routing-machine@3.2.12/dist/leaflet-routing-machine.css" />
+    <script src="https://unpkg.com/leaflet-routing-machine@3.2.12/dist/leaflet-routing-machine.js"></script>
+
+    <link rel="stylesheet" href="https://unpkg.com/leaflet.markercluster@1.4.1/dist/MarkerCluster.css" />
+    <link rel="stylesheet" href="https://unpkg.com/leaflet.markercluster@1.4.1/dist/MarkerCluster.Default.css" />
+    <script src="https://unpkg.com/leaflet.markercluster@1.4.1/dist/leaflet.markercluster.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/sortablejs@1.15.0/Sortable.min.js"></script>
+
+    <style>
+        #map { height: calc(100vh - 32px); width: 100%; }
+        .leaflet-routing-container { display: none !important; }
+        
+        .quick-column-scroll { max-height: 200px; overflow-y: auto; }
+        .quick-column-scroll::-webkit-scrollbar { width: 6px; }
+        .quick-column-scroll::-webkit-scrollbar-thumb { background: #4b5563; border-radius: 4px; }
+        
+        .legend-content-transition {
+            transition: all 0.25s ease-in-out;
+            max-height: 500px;
+            opacity: 1;
+        }
+        .legend-content-transition.collapsed {
+            max-height: 0px;
+            opacity: 0;
+            padding: 0 !important;
+            overflow: hidden;
+        }
+
+        .map-crosshair {
+            position: absolute;
+            top: 50%; left: 50%;
+            width: 30px; height: 30px;
+            margin-left: -15px; margin-top: -15px;
+            z-index: 2000; pointer-events: none;
+        }
+        .map-crosshair::before, .map-crosshair::after {
+            content: ''; position: absolute; background: #ffffff; box-shadow: 0 0 3px rgba(0,0,0,0.8);
+        }
+        .map-crosshair::before { top: 14px; left: 0; width: 100%; height: 2px; }
+        .map-crosshair::after { left: 14px; top: 0; width: 2px; height: 100%; }
+
+        .house-number-label {
+            background: transparent !important;
+            border: none !important;
+            box-shadow: none !important;
+            color: white !important;
+            font-weight: 800 !important;
+            font-size: 13px !important;
+            text-shadow: 1px 1px 0 #000, -1px -1px 0 #000, 1px -1px 0 #000, -1px 1px 0 #000, 0 2px 4px rgba(0,0,0,0.5) !important;
+            padding: 0 !important;
+            white-space: nowrap !important;
+        }
+        .sortable-ghost { opacity: 0.3; background: #10b981 !important; }
+    </style>
+</head>
+<body class="bg-gray-900 text-gray-100 min-h-screen font-sans antialiased text-sm overflow-hidden">
+
+    <div class="w-full h-screen p-4">
+        <div class="flex flex-col lg:flex-row gap-4 h-full">
+            
+            <div class="lg:w-80 xl:w-96 bg-gray-800 p-4 rounded-xl shadow-xl border border-gray-700 flex flex-col gap-4 overflow-y-auto">
+                <div>
+                    <h1 class="text-lg font-extrabold text-emerald-400 flex items-center gap-2 italic">📦 ROUTE FOCUS</h1>
+                </div>
+
+                <div id="file-status" class="p-2 rounded-lg text-[10px] font-bold text-center bg-yellow-950 text-yellow-400 border border-yellow-800 animate-pulse">
+                    ⏳ กำลังโหลดไฟล์...
+                </div>
+
+                <div class="bg-gray-700/40 p-3 rounded-lg border border-gray-600/70 space-y-3">
+                    <div class="grid grid-cols-1 gap-2">
+                        <div>
+                            <span class="block text-[11px] text-gray-300 mb-1 font-bold">🔍 ค้นหาบ้านเลขที่</span>
+                            <input type="text" id="search-number-input" oninput="debounceSearch()" 
+                                   placeholder="พิมพ์บ้านเลขที่..."
+                                   class="w-full bg-gray-800 border border-gray-600 rounded-lg px-3 py-1.5 text-white focus:outline-none focus:border-emerald-500 font-semibold shadow-inner">
+                        </div>
+                    </div>
+
+                    <div id="quick-results-box" class="border border-gray-600 bg-gray-900/90 rounded-lg p-2">
+                        <div id="quick-results-columns" class="quick-column-scroll grid grid-cols-1 gap-1.5 text-xs text-gray-500 py-2">
+                            <div class="text-center">พิมพ์เพื่อค้นหา</div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- <div class="bg-gray-700/50 p-3 rounded-lg border border-gray-600 flex flex-col gap-2">
+                    <h3 class="text-[10px] font-bold text-blue-400 uppercase">📍 เพิ่มพิกัดใหม่</h3>
+                    <div class="flex gap-2">
+                        <input type="text" id="new-house-name" placeholder="บ้านเลขที่" class="flex-1 bg-gray-800 border border-gray-600 rounded px-2 py-1 text-xs text-white">
+                        <select id="new-house-village" class="w-20 bg-gray-800 border border-gray-600 rounded px-1 py-1 text-[10px] text-white">
+                            <option value="ม.ทั่วไป">ม.ทั่วไป</option>
+                            <option value="ม.10">ม.10</option><option value="ม.16">ม.16</option>
+                            <option value="ม.22">ม.22</option><option value="ม.12">ม.12</option>
+                            <option value="ม.5">ม.5</option><option value="ม.21">ม.21</option>
+                        </select>
+                    </div>
+                    <button onclick="saveNewHouse()" class="w-full bg-blue-600 hover:bg-blue-500 text-white font-bold py-1.5 rounded text-[10px] transition active:scale-95">บันทึกเป้ากลางจอ</button>
+                    <input type="hidden" id="new-house-lat">
+                    <input type="hidden" id="new-house-lng">
+                </div>  -->
+
+                <div class="flex-1 flex flex-col min-h-0">
+                    <div class="flex justify-between items-center mb-1">
+                        <h3 class="text-xs font-bold text-amber-500 uppercase tracking-wider">📋 คิวส่ง (<span id="queue-count">0</span>)</h3>
+                        <button onclick="clearQueue()" class="text-[10px] text-red-400 hover:underline font-bold">ล้างคิว/แสดงทั้งหมด</button>
+                    </div>
+                    <div class="flex-1 bg-gray-900/80 rounded-lg p-2 border border-gray-700 overflow-y-auto">
+                        <ul id="queue-list" class="space-y-1 text-sm">
+                            <li class="text-gray-500 text-center py-4 text-[11px]">ไม่มีคิวส่ง</li>
+                        </ul>
+                    </div>
+                </div>
+            </div>
+
+            <div class="flex-1 bg-gray-800 rounded-xl shadow-xl border border-gray-700 relative overflow-hidden">
+                <div id="map"></div>
+                <div class="map-crosshair"></div>
+                
+                <div class="absolute bottom-6 left-6 bg-gray-900/95 border border-gray-700 rounded-xl shadow-2xl z-[1000] text-xs w-[180px] overflow-hidden">
+                    <div onclick="toggleLegendVisibility()" class="bg-gray-800 px-3 py-2 flex justify-between items-center cursor-pointer">
+                        <span class="font-bold text-emerald-400 text-[11px]">🎨 สีหมู่บ้าน</span>
+                        <span id="legend-toggle-btn" class="text-gray-400 text-[10px]"><i class="fa-solid fa-chevron-down"></i></span>
+                    </div>
+                    <div id="legend-content-wrapper" class="legend-content-transition p-3">
+                        <div id="legend-container" class="grid grid-cols-2 gap-x-2 gap-y-1.5 text-[10px]"></div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        const map = L.map('map', { zoomControl: false }).setView([14.41, 101.70], 13);
+        L.control.zoom({ position: 'topright' }).addTo(map);
+        L.tileLayer('https://mt1.google.com/vt/lyrs=s&x={x}&y={y}&z={z}', { maxZoom: 20 }).addTo(map);
+
+        let allHouses = []; 
+        let markersLayer = L.layerGroup().addTo(map); 
+        let deliveryQueue = []; 
+        let routingControl = null; 
+        let searchTimer = null; 
+        let isLegendVisible = true; 
+
+        const villageColors = {
+            "ม.10": "#ef4444", "ม.16": "#3b82f6", "ม.22": "#22c55e", "ม.12": "#f59e0b",
+            "ม.5": "#8b5cf6", "ม.21": "#10b981", "ม.2": "#0e7490", "ม.19": "#f97316",
+            "ม.1": "#ec4899", "ม.7": "#06b6d4", "ม.8": "#14b8a6", "ม.ทั่วไป": "#6b7280"
+        };
+
+        Sortable.create(document.getElementById('queue-list'), {
+            animation: 150,
+            onEnd: function () {
+                const newOrder = [];
+                document.querySelectorAll('#queue-list li').forEach(el => {
+                    const id = el.getAttribute('data-id');
+                    const house = allHouses.find(h => h.id === id);
+                    if(house) newOrder.push(house);
+                });
+                deliveryQueue = newOrder;
+                updateQueueUI(false); 
+            }
+        });
+
+        function loadKMLFile() {
+            fetch('houses.kml?t=' + new Date().getTime())
+                .then(res => res.text())
+                .then(str => {
+                    const kml = new DOMParser().parseFromString(str, "text/xml");
+                    const placemarks = kml.getElementsByTagName("Placemark");
+                    allHouses = []; 
+                    for (let p of placemarks) {
+                        const name = p.getElementsByTagName("name")[0]?.textContent || "Unknown";
+                        const coords = p.getElementsByTagName("coordinates")[0]?.textContent.trim().split(",");
+                        if (coords) {
+                            let village = "ม.ทั่วไป";
+                            const match = name.match(/ม\.\d+/i);
+                            if (match) village = match[0].toLowerCase();
+                            allHouses.push({ id: name, lat: parseFloat(coords[1]), lng: parseFloat(coords[0]), village: village });
+                        }
+                    }
+                    plotMarkers();
+                    updateLegend();
+                    document.getElementById("file-status").className = "p-2 rounded-lg text-[11px] font-bold text-center bg-emerald-950 text-emerald-400 border border-emerald-800";
+                    document.getElementById("file-status").innerHTML = `✅ พร้อมส่ง ${allHouses.length} หลัง`;
+                });
+        }
+
+        // ปรับปรุงฟังก์ชันวาดหมุดให้ทำงานเร็วขึ้น ไม่ค้าง
+        // ฟังก์ชันวาดหมุด: เพิ่มการเช็คลำดับคิวเพื่อแสดงใน Popup
+        function plotMarkers(filteredList = null) {
+            markersLayer.clearLayers();
+            
+            // ถ้ามีของในคิวและไม่ได้กำลังค้นหา ให้แสดงเฉพาะในคิว (Focus Mode)
+            let housesToDisplay = filteredList || (deliveryQueue.length > 0 ? deliveryQueue : allHouses);
+
+            housesToDisplay.forEach(house => {
+                const color = villageColors[house.village] || "#6b7280";
+                
+                // หาว่าบ้านหลังนี้อยู่ในคิวลำดับที่เท่าไหร่
+                const queueIndex = deliveryQueue.findIndex(q => q.id === house.id);
+                const isOrdered = queueIndex !== -1;
+
+                const icon = L.divIcon({
+                    html: `<div style="background-color: ${isOrdered ? '#fbbf24' : color}; 
+                                     width: 16px; height: 16px; 
+                                     border-radius: 50%; border: 2px solid white; 
+                                     box-shadow: 0 0 5px rgba(0,0,0,0.5);
+                                     display: flex; align-items: center; justify-content: center;
+                                     color: black; font-size: 9px; font-weight: bold;">
+                                     ${isOrdered ? (queueIndex + 1) : ''}
+                           </div>`,
+                    className: '', iconSize: [16, 16], iconAnchor: [8, 8]
+                });
+
+                const marker = L.marker([house.lat, house.lng], { icon: icon });
+                
+                // ป้ายเลขที่บ้าน
+                marker.bindTooltip(house.id, { 
+                    permanent: true, 
+                    direction: 'right', 
+                    offset: [12, 0], 
+                    className: 'house-number-label' 
+                });
+
+                // เนื้อหาใน Popup
+                let popupContent = `<div class="text-center font-sans p-1">
+                                    <b class="text-lg text-gray-800">${house.id}</b><br>`;
+                
+                if (isOrdered) {
+                    popupContent += `<div class="bg-amber-100 text-amber-800 px-2 py-1 rounded-md my-2 font-bold border border-amber-200">
+                                        📍 ลำดับการส่งที่: ${queueIndex + 1}
+                                     </div>
+                                     <button onclick="removeFromQueue(${queueIndex})" class="bg-red-500 text-white px-4 py-1 rounded text-[10px] font-bold w-full">❌ เอาออกจากคิว</button>`;
+                } else {
+                    popupContent += `<button onclick="addToQueue('${house.id}')" class="bg-emerald-500 text-white px-4 py-1.5 rounded mt-2 text-xs font-bold w-full">➕ เพิ่มลงคิว</button>`;
+                }
+                
+                popupContent += `</div>`;
+
+                marker.bindPopup(popupContent);
+                markersLayer.addLayer(marker);
+            });
+        }
+
+
+        // 1. กำหนดลำดับหมู่บ้านตามเส้นทางนำจ่าย (Routing Priority)
+        const villagePriority = {
+            "ม.10": 1, "ม.16": 2, "ม.22": 3, "ม.12": 4,
+            "ม.5": 5, "ม.21": 6, "ม.2": 7, "ม.19": 8,
+            "ม.1": 9, "ม.7": 10, "ม.8": 11
+        };
+
+        // 2. ฟังก์ชันเพิ่มลงคิว พร้อมจัดเรียงตามหมู่และเลขที่บ้านให้อัตโนมัติ
+        // 1. ฟังก์ชันเพิ่มเข้าคิว (เรียงหมู่ให้โดยอัตโนมัติ)
+function addToQueue(houseId) {
+    const house = allHouses.find(h => h.id === houseId);
+    if (!house || deliveryQueue.some(q => q.id === houseId)) {
+        map.closePopup();
+        return;
+    }
+
+    deliveryQueue.push(house);
+    
+    // เรียงลำดับตามหมู่ (1-11)
+    deliveryQueue.sort((a, b) => {
+        const pA = villagePriority[a.village] || 99;
+        const pB = villagePriority[b.village] || 99;
+        return pA - pB; 
+    });
+
+    updateQueueUI(true);
+    map.closePopup();
+}
+
+// ลบเฉพาะบ้านหลังที่ระบุ ID
+function removeFromQueue(houseId) {
+    // กรองเอาเฉพาะตัวที่ไม่ใช่ ID นี้เก็บไว้
+    deliveryQueue = deliveryQueue.filter(h => h.id !== houseId);
+    // อัปเดต UI และวาดเส้นใหม่
+    updateQueueUI(true);
+}
+
+// ล้างคิวทั้งหมด
+function clearQueue() {
+    if (confirm("คุณต้องการล้างคิวทั้งหมดใช่หรือไม่?")) {
+        deliveryQueue = [];
+        // ล้างเส้นออกให้เกลี้ยง
+        if (window.deliveryPath) {
+            map.removeLayer(window.deliveryPath);
+            window.deliveryPath = null;
+        }
+        updateQueueUI(true);
+    }
+}
+
+function updateQueueUI(refreshList = true) {
+    const queueCountEl = document.getElementById("queue-count");
+    if (queueCountEl) queueCountEl.innerText = deliveryQueue.length;
+    
+    if (refreshList) {
+        const ul = document.getElementById("queue-list");
+        ul.innerHTML = ''; // ล้างของเก่าทิ้งให้หมดก่อน
+
+        deliveryQueue.forEach((h, i) => {
+            const li = document.createElement('li');
+            li.className = "p-2 bg-gray-700 border border-gray-600 rounded flex items-center justify-between mb-1 shadow-sm";
+            
+            // สร้างโครงสร้างภายใน
+            li.innerHTML = `
+                <div class="flex items-center gap-2">
+                    <span class="bg-amber-500 text-gray-900 text-[10px] w-5 h-5 rounded-full flex items-center justify-center font-bold">${i+1}</span>
+                    <div>
+                        <div class="text-white text-xs font-bold">${h.id}</div>
+                        <div class="text-[9px] text-gray-400 italic">${h.village}</div>
+                    </div>
+                </div>
+                <button class="delete-btn text-gray-400 hover:text-red-400 px-2" data-id="${h.id}">
+                    <i class="fa-solid fa-xmark"></i>
+                </button>
+            `;
+            ul.appendChild(li);
+        });
+
+        // "ฝัง" คำสั่งลบให้ปุ่มใหม่ที่เพิ่งสร้าง
+        document.querySelectorAll('.delete-btn').forEach(btn => {
+            btn.addEventListener('click', function() {
+                const idToDelete = this.getAttribute('data-id');
+                removeFromQueue(idToDelete);
+            });
+        });
+    }
+    
+    plotMarkers(); 
+    drawPath(); // วาดเส้นทางใหม่
+}
+
+// 3. แยกฟังก์ชันวาดเส้นออกมาต่างหาก เพื่อให้เรียกใช้ได้แม่นยำ
+function drawPath() {
+    // 1. ลบเส้นเดิมออก
+    if (window.routingControl) {
+        map.removeControl(window.routingControl);
+        window.routingControl = null;
+    }
+
+    if (deliveryQueue.length > 1) {
+        // 2. ใช้ Routing แต่ตั้งค่าให้มัน "ซื่อตรง" ที่สุด
+        window.routingControl = L.Routing.control({
+            waypoints: deliveryQueue.map(h => L.latLng(h.lat, h.lng)),
+            routeWhileDragging: false,
+            addWaypoints: false, // ห้ามเพิ่มจุดระหว่างทางเอง
+            draggableWaypoints: false,
+            fitSelectedRoutes: true, // ไม่ให้แผนที่กระโดดไปมา
+            show: false, // ซ่อนกล่องข้อความนำทาง
+            lineOptions: {
+                styles: [{ color: '#FF0000', weight: 10, opacity: 1.0 }] //เปลี่ยนสีเส้น ทาง
+            },
+            // หัวใจสำคัญ: ปรับจูนให้มันไม่พยายามพาอ้อม
+            router: L.Routing.osrmv1({
+                serviceUrl: 'https://router.project-osrm.org/route/v1',
+                profile: 'driving' 
+            })
+        }).addTo(map);
+    }
+}
+
+
+        function debounceSearch() {
+            clearTimeout(searchTimer);
+            searchTimer = setTimeout(searchHouse, 250);
+        }
+
+        function searchHouse() {
+            const query = document.getElementById("search-number-input").value.trim().toLowerCase();
+            const quickResults = document.getElementById("quick-results-columns");
+            
+            if (!query) {
+                quickResults.innerHTML = '<div class="text-center">พิมพ์เพื่อค้นหา</div>';
+                plotMarkers();
+                return;
+            }
+
+            const filtered = allHouses.filter(h => h.id.toLowerCase().includes(query));
+            plotMarkers(filtered);
+
+            // Logic ใหม่: นับแค่เลขหน้า (ก่อน ม.) และแยกกลุ่มตามเลขหน้าสุด
+            const groups = {};
+            filtered.forEach(h => {
+                let houseNumberPart = h.id.split(/ม\./i)[0].trim();
+                const match = houseNumberPart.match(/^\d+/);
+                const groupKey = match ? match[0] : "อื่นๆ";
+                
+                if (!groups[groupKey]) groups[groupKey] = [];
+                groups[groupKey].push(h);
+            });
+
+            const sortedKeys = Object.keys(groups).sort((a, b) => isNaN(a) ? 1 : parseInt(a) - parseInt(b));
+
+            let html = '';
+            sortedKeys.forEach(key => {
+                html += `<div class="text-[10px] font-bold text-blue-400 mt-3 mb-1 px-1 border-b border-gray-700 pb-1 italic">กลุ่มเลข ${key}</div>`;
+                html += groups[key].map(h => `
+                    <div class="flex justify-between items-center bg-gray-800/60 p-2 rounded border border-gray-700 mb-1">
+                        <span class="font-bold text-[11px] text-white">${h.id}</span>
+                        <div class="flex gap-1">
+                            <button onclick="map.setView([${h.lat}, ${h.lng}], 19)" class="bg-blue-600 px-2 py-0.5 rounded text-[10px]">เล็ง</button>
+                            <button onclick="addToQueue('${h.id}')" class="bg-emerald-600 px-2 py-0.5 rounded text-[10px]">+</button>
+                        </div>
+                    </div>
+                `).join('');
+            });
+            
+            quickResults.innerHTML = html || '<div class="text-center py-4">ไม่พบข้อมูล</div>';
+        }
+
+        function updateLegend() {
+            const container = document.getElementById("legend-container");
+            container.innerHTML = Object.keys(villageColors).map(v => `
+                <div class="flex items-center gap-1.5 truncate">
+                    <span style="background-color: ${villageColors[v]};" class="w-2.5 h-2.5 rounded-full border border-white/30 shrink-0"></span>
+                    <span>${v.toUpperCase()}</span>
+                </div>
+            `).join('');
+        }
+
+        loadKMLFile();
+    </script>
+</body>
+</html>
